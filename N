@@ -1,0 +1,60 @@
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+
+# Assuming `df` is your original DataFrame
+
+# Step 1: Separate categorical and numerical columns
+categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+numerical_cols = df.select_dtypes(include=['float32', 'float64', 'int32', 'int64']).columns
+
+# Step 2: Preprocessing pipeline
+# One-hot encode categorical columns and scale numerical columns
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(), numerical_cols),
+        ('cat', OneHotEncoder(drop='first'), categorical_cols)
+    ])
+
+# Apply preprocessing (scaling and encoding)
+X_processed = preprocessor.fit_transform(df)
+
+# Step 3: Convert preprocessed data to a DataFrame (optional, for easier handling)
+# Get feature names from the preprocessor for encoded columns
+encoded_cols = preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_cols)
+all_columns = np.concatenate([numerical_cols, encoded_cols])
+
+# Convert to DataFrame for better handling
+X_df = pd.DataFrame(X_processed, columns=all_columns)
+
+# Step 4: Apply Isolation Forest on the processed data
+isolation_forest = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
+labels = isolation_forest.fit_predict(X_df)
+
+# Step 5: Merge the results back with the original DataFrame
+df_with_labels = df.copy()
+df_with_labels['labels'] = labels
+
+# Create a new column that marks anomalies
+df_with_labels['is_anomaly'] = df_with_labels['labels'].apply(lambda x: 'Anomaly' if x == -1 else 'Normal')
+
+# Now `df_with_labels` contains the original data, the anomaly labels, and the flag for anomalies
+
+
+
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+# Reduce data to 2D for visualization using PCA
+pca = PCA(n_components=2)
+reduced_data = pca.fit_transform(X_processed)
+
+# Create a scatter plot with anomalies in red and normal points in blue
+plt.figure(figsize=(10, 6))
+plt.scatter(reduced_data[:, 0], reduced_data[:, 1], c=df_with_labels['is_anomaly'].map({'Anomaly': 'red', 'Normal': 'blue'}))
+plt.title('Isolation Forest: Anomalies in Red, Normal Points in Blue')
+plt.xlabel('PCA Component 1')
+plt.ylabel('PCA Component 2')
+plt.show()
