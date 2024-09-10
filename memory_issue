@@ -1,0 +1,50 @@
+
+import numpy as np
+import pandas as pd
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
+
+# Function to apply DBSCAN in batches
+def apply_dbscan_in_batches(X, batch_size, eps=0.5, min_samples=5):
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    
+    # Initialize lists to store labels and indices
+    all_labels = []
+    all_indices = []
+
+    # Process data in batches
+    for i in range(0, len(X), batch_size):
+        X_batch = X[i:i + batch_size]  # Select batch
+        indices_batch = X.index[i:i + batch_size]  # Get the indices of the batch
+
+        # Apply DBSCAN on the batch
+        labels_batch = dbscan.fit_predict(X_batch)
+        
+        # Append the labels and indices
+        all_labels.extend(labels_batch)
+        all_indices.extend(indices_batch)
+    
+    # Combine all the labels and indices into a DataFrame
+    return pd.DataFrame({'index': all_indices, 'labels': all_labels})
+
+# Example usage:
+# Load your data (X should be a DataFrame or NumPy array of numerical data)
+X = df.select_dtypes(include=['float32', 'float64', 'int32', 'int64'])  # Select numerical columns
+
+# Standardize the data to improve DBSCAN performance
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Convert scaled data back to DataFrame with original indices
+X_scaled_df = pd.DataFrame(X_scaled, index=df.index)
+
+# Set batch size (choose a size that fits in memory)
+batch_size = 10000
+
+# Apply DBSCAN in batches
+dbscan_results = apply_dbscan_in_batches(X_scaled_df, batch_size, eps=0.5, min_samples=5)
+
+# Merge the results back with the original DataFrame
+df_with_labels = df.merge(dbscan_results, left_index=True, right_on='index', how='left')
+
+# Now `df_with_labels` contains the original data and the DBSCAN labels
