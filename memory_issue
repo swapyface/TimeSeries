@@ -1,4 +1,63 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
 
+# Sample data with valid negative prices
+data = {
+    'trade_id': [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
+    'date': pd.date_range('2024-01-01', periods=14, freq='D'),
+    'price': [10, -5, 30, 100, 40, -50, 45, 100, 200, 300, -1000, 400, 500, 450]  # Valid negative prices
+}
+
+df = pd.DataFrame(data)
+
+# Preprocess data
+df['date'] = pd.to_datetime(df['date'])
+
+# Define a function to detect anomalies for each trade ID separately
+def detect_anomalies(group):
+    # Apply rolling statistics on the 'price' feature for the past 5 days
+    group['rolling_mean'] = group['price'].rolling(5, min_periods=1).mean()
+    group['rolling_std'] = group['price'].rolling(5, min_periods=1).std()
+    
+    # Drop NaN values resulting from rolling operations
+    group = group.dropna(subset=['rolling_mean', 'rolling_std'])
+    
+    # Check if the group has enough rows to apply the model
+    if group.shape[0] > 0:  # Ensure that the group is not empty
+        # Fit the Isolation Forest model to detect anomalies based on 'price' and 'rolling' features
+        features = ['price', 'rolling_mean', 'rolling_std']
+        
+        # Fit the model if there's enough data
+        if group[features].shape[0] > 0:
+            clf = IsolationForest(contamination=0.05, random_state=42)
+            group['anomaly_score'] = clf.fit_predict(group[features])
+        else:
+            group['anomaly_score'] = np.nan  # Handle case with no valid rows
+    else:
+        group['anomaly_score'] = np.nan  # Skip empty groups
+
+    return group
+
+# Group by 'trade_id' and apply the function to each group
+df_anomaly_detected = df.groupby('trade_id').apply(detect_anomalies)
+
+# Anomalies
+anomalies = df_anomaly_detected[df_anomaly_detected['anomaly_score'] == -1]
+
+# Visualize results
+import matplotlib.pyplot as plt
+
+# Plot all data
+plt.scatter(df_anomaly_detected['date'], df_anomaly_detected['price'], color='blue', label='Normal')
+
+# Highlight anomalies
+plt.scatter(anomalies['date'], anomalies['price'], color='red', label='Anomaly')
+plt.legend()
+plt.show()
+
+# Print anomalies
+print(anomalies[['trade_id', 'date', 'price', 'anomaly_score']])
 import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN
