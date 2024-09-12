@@ -72,3 +72,59 @@ plt.scatter(df['date'], df['numerical_feature'], color='blue', label='Normal')
 plt.scatter(df_anomalies['date'], df_anomalies['numerical_feature'], color='red', label='Anomaly')
 plt.legend()
 plt.show()
+
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
+
+# Sample data
+data = {
+    'trade_id': [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
+    'date': pd.date_range('2024-01-01', periods=14, freq='D'),
+    'price': [10, 20, 30, 100, 40, 50, 45, 100, 200, 300, 7000, 400, 500, 450]
+}
+
+df = pd.DataFrame(data)
+
+# Preprocess data
+df['date'] = pd.to_datetime(df['date'])
+
+# Define a function to detect anomalies for each trade ID separately
+def detect_anomalies(group):
+    # Apply rolling statistics on the 'price' feature for the past 5 days
+    group['rolling_mean'] = group['price'].rolling(5, min_periods=1).mean()
+    group['rolling_std'] = group['price'].rolling(5, min_periods=1).std()
+    
+    # Fit the Isolation Forest model to detect anomalies based on 'price' and 'rolling' features
+    features = ['price', 'rolling_mean', 'rolling_std']
+    clf = IsolationForest(contamination=0.05, random_state=42)
+    
+    # Drop NaN values that may come from rolling operations
+    group = group.dropna(subset=features)
+    
+    # Predict anomaly scores (-1 means anomaly, 1 means normal)
+    group['anomaly_score'] = clf.fit_predict(group[features])
+    
+    return group
+
+# Group by 'trade_id' and apply the function to each group
+df_anomaly_detected = df.groupby('trade_id').apply(detect_anomalies)
+
+# Anomalies
+anomalies = df_anomaly_detected[df_anomaly_detected['anomaly_score'] == -1]
+
+# Visualize results
+import matplotlib.pyplot as plt
+
+# Plot all data
+plt.scatter(df_anomaly_detected['date'], df_anomaly_detected['price'], color='blue', label='Normal')
+
+# Highlight anomalies
+plt.scatter(anomalies['date'], anomalies['price'], color='red', label='Anomaly')
+plt.legend()
+plt.show()
+
+# Print anomalies
+print(anomalies[['trade_id', 'date', 'price', 'anomaly_score']])
+
+
