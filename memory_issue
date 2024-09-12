@@ -48,3 +48,27 @@ dbscan_results = apply_dbscan_in_batches(X_scaled_df, batch_size, eps=0.5, min_s
 df_with_labels = df.merge(dbscan_results, left_index=True, right_on='index', how='left')
 
 # Now `df_with_labels` contains the original data and the DBSCAN labels
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
+
+# Assume `df` is your trading data with a `trade_id` and `date` column
+df['date'] = pd.to_datetime(df['date'])
+
+# Create rolling features (e.g., 5-day rolling mean)
+df['rolling_mean'] = df.groupby('trade_id')['numerical_feature'].rolling(5).mean().reset_index(0, drop=True)
+
+# Isolation Forest for Anomaly Detection
+clf = IsolationForest(contamination=0.01)
+features = ['numerical_feature1', 'numerical_feature2', 'rolling_mean']
+df['anomaly_score'] = clf.fit_predict(df[features])
+
+# Anomalies
+df_anomalies = df[df['anomaly_score'] == -1]
+
+# Visualize Anomalies
+import matplotlib.pyplot as plt
+plt.scatter(df['date'], df['numerical_feature'], color='blue', label='Normal')
+plt.scatter(df_anomalies['date'], df_anomalies['numerical_feature'], color='red', label='Anomaly')
+plt.legend()
+plt.show()
