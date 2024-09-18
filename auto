@@ -7,7 +7,6 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import Input
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
-import keras_tuner as kt
 
 # Assuming your clean dataset is a Pandas DataFrame with 'category' and 'numerical_column'
 df = pd.DataFrame({
@@ -24,27 +23,25 @@ df['category_encoded'] = le.fit_transform(df['category'])
 scaler = StandardScaler()
 df['scaled_numerical'] = scaler.fit_transform(df[['numerical_column']])
 
-# Step 2: Define a model-building function for hyperparameter tuning
-def build_autoencoder(hp):
+# Step 2: Define the autoencoder model
+def build_autoencoder():
     model = Sequential([
         Input(shape=(1,)),
-        Dense(units=hp.Int('units1', min_value=8, max_value=64, step=8), activation='relu'),
-        Dense(units=hp.Int('units2', min_value=4, max_value=32, step=4), activation='relu'),
-        Dense(units=hp.Int('units1', min_value=8, max_value=64, step=8), activation='relu'),
-        Dense(1, activation='linear')
+        Dense(16, activation='relu'),
+        Dense(8, activation='relu'),
+        Dense(16, activation='relu'),
+        Dense(1, activation='linear')  # Output layer to reconstruct the input
     ])
     
-    # Tune the learning rate for the Adam optimizer
-    learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
-    model.compile(optimizer=Adam(learning_rate=learning_rate), loss='mse')
+    model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
     
     return model
 
-# Step 3: Train and tune the model for each category separately
+# Step 3: Train the model for each category separately
 categories = df['category'].unique()
 
 for category in categories:
-    print(f"Training and tuning autoencoder for category: {category}")
+    print(f"Training autoencoder for category: {category}")
     
     # Select the data for the current category
     category_data = df[df['category'] == category]['scaled_numerical'].values
@@ -53,23 +50,14 @@ for category in categories:
     # Train/test split
     X_train, X_test = train_test_split(category_data, test_size=0.2, random_state=42)
     
-    # Step 4: Hyperparameter tuning using Keras Tuner
-    tuner = kt.RandomSearch(
-        build_autoencoder,
-        objective='val_loss',
-        max_trials=5,  # You can increase this for more extensive tuning
-        executions_per_trial=1,
-        directory='autoencoder_tuning',
-        project_name=f'category_{category}_autoencoder'
-    )
+    # Build the autoencoder model
+    model = build_autoencoder()
     
-    tuner.search(X_train, X_train, epochs=50, validation_data=(X_test, X_test), verbose=0)
+    # Train the model
+    model.fit(X_train, X_train, epochs=100, batch_size=8, validation_data=(X_test, X_test), verbose=0)
     
-    # Get the best model from the tuner
-    best_model = tuner.get_best_models(num_models=1)[0]
-    
-    # Reconstruct the entire category data using the best model
-    reconstruction = best_model.predict(category_data)
+    # Reconstruct the entire category data
+    reconstruction = model.predict(category_data)
     
     # Inverse transform to get original values
     original_values = scaler.inverse_transform(category_data)
@@ -80,6 +68,6 @@ for category in categories:
     for original, reconstructed in zip(original_values, reconstructed_values):
         print(f"Original: {original[0]}, Reconstructed: {reconstructed[0]}")
     
-    # Step 5: Calculate and print the model score (MSE)
+    # Step 4: Calculate and print the model score (MSE)
     mse = mean_squared_error(original_values, reconstructed_values)
     print(f"Model MSE for category '{category}': {mse}\n")
