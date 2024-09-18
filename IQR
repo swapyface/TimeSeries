@@ -1,0 +1,82 @@
+import pandas as pd
+import numpy as np
+
+# Step 1: Load the existing data and calculate moving averages for each category
+def calculate_moving_avg(data, category_col, value_col):
+    # Group by category
+    moving_avgs = data.groupby(category_col)[value_col].expanding().mean().reset_index()
+    moving_avgs = moving_avgs.drop('level_1', axis=1)
+    return moving_avgs
+
+# Step 2: Load new data and check for outliers based on IQR
+def flag_outliers(data, category_col, value_col):
+    outliers = []
+    non_outliers = []
+    
+    grouped = data.groupby(category_col)
+    
+    for category, group in grouped:
+        q1 = group[value_col].quantile(0.25)
+        q3 = group[value_col].quantile(0.75)
+        iqr = q3 - q1
+        
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        
+        for index, row in group.iterrows():
+            if row[value_col] < lower_bound or row[value_col] > upper_bound:
+                outliers.append(row)
+            else:
+                non_outliers.append(row)
+    
+    return pd.DataFrame(outliers), pd.DataFrame(non_outliers)
+
+# Step 3: Update the moving average Excel file
+def update_moving_avg(new_data, category_col, value_col, avg_file):
+    # Load the existing moving averages
+    moving_avgs = pd.read_excel(avg_file)
+    
+    for _, row in new_data.iterrows():
+        category = row[category_col]
+        value = row[value_col]
+        
+        # Check if the category exists in the moving averages file
+        if category in moving_avgs[category_col].values:
+            # Update the moving average
+            current_avg = moving_avgs.loc[moving_avgs[category_col] == category, value_col].values[0]
+            new_avg = (current_avg + value) / 2
+            moving_avgs.loc[moving_avgs[category_col] == category, value_col] = new_avg
+        else:
+            # Add a new category with its initial value
+            new_row = pd.DataFrame({category_col: [category], value_col: [value]})
+            moving_avgs = pd.concat([moving_avgs, new_row], ignore_index=True)
+    
+    # Save the updated moving averages to the Excel file
+    moving_avgs.to_excel(avg_file, index=False)
+
+# Step 4: Process new data and update files accordingly
+def process_new_data(new_data, category_col, value_col, avg_file, outlier_file):
+    outliers, non_outliers = flag_outliers(new_data, category_col, value_col)
+    
+    # Update moving averages for non-outliers
+    update_moving_avg(non_outliers, category_col, value_col, avg_file)
+    
+    # Append outliers to the outlier file
+    if not outliers.empty:
+        with pd.ExcelWriter(outlier_file, mode='a') as writer:
+            outliers.to_excel(writer, index=False)
+
+# Example usage
+data = pd.read_csv('initial_dataset.csv')  # Load your data
+category_col = 'category'
+value_col = 'value'
+
+# Step 1: Calculate moving averages and save to Excel
+moving_avg_df = calculate_moving_avg(data, category_col, value_col)
+moving_avg_df.to_excel('moving_avg.xlsx', index=False)
+
+# Load new data for processing
+new_data = pd.read_excel('new_data.xlsx')
+
+# Step 4: Process new data and update files
+process_new_data(new_data, category_col, value_col, 'moving_avg.xlsx', 'outliers.xlsx')
