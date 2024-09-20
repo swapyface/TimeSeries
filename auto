@@ -2,20 +2,21 @@ import pandas as pd
 import numpy as np
 from ingestion import load_data  # Assuming ingestion.py contains a function `load_data`
 
-def reduce_memory_usage(df):
+def reduce_memory_usage(df, columns):
     """
-    Reduces memory usage of a DataFrame by downcasting numerical and object types where possible.
+    Reduces memory usage of specified columns in a DataFrame by downcasting numerical types where possible.
 
     Parameters:
     df (pd.DataFrame): The DataFrame to optimize.
+    columns (list): List of columns to optimize.
 
     Returns:
-    pd.DataFrame: Memory-optimized DataFrame.
+    pd.DataFrame: Memory-optimized DataFrame with specified columns.
     """
-    start_mem = df.memory_usage().sum() / 1024**2
-    print(f"Initial memory usage: {start_mem:.2f} MB")
+    start_mem = df[columns].memory_usage().sum() / 1024**2
+    print(f"Initial memory usage for specified columns: {start_mem:.2f} MB")
 
-    for col in df.columns:
+    for col in columns:
         col_type = df[col].dtype
 
         if col_type != object:
@@ -34,28 +35,25 @@ def reduce_memory_usage(df):
             else:
                 # Downcast float columns
                 df[col] = pd.to_numeric(df[col], downcast='float')
-        else:
-            # Convert object types to category for memory efficiency
-            df[col] = df[col].astype('category')
 
-    end_mem = df.memory_usage().sum() / 1024**2
-    print(f"Final memory usage after optimization: {end_mem:.2f} MB")
+    end_mem = df[columns].memory_usage().sum() / 1024**2
+    print(f"Final memory usage for specified columns: {end_mem:.2f} MB")
     print(f"Reduced memory by: {100 * (start_mem - end_mem) / start_mem:.1f}%")
 
     return df
 
-def preprocess_data(df, dependent_column):
+def preprocess_data(df, dependent_column, feature_column):
     """
     Perform data preprocessing including:
     - Handling missing values and specific flags in the 'rating' column.
     - Flagging rows with missing numerical values.
-    - Flagging outliers in the dependent column.
     - Converting the dependent variable from float to int by truncating decimals.
-    - Memory optimization for efficient processing.
+    - Memory optimization for specified columns.
 
     Parameters:
     df (pd.DataFrame): Raw DataFrame loaded from the ingestion module.
     dependent_column (str): The dependent variable/column for the model.
+    feature_column (str): The feature variable/column for the model.
 
     Returns:
     pd.DataFrame, pd.DataFrame: Two DataFrames - one preprocessed dataset and one containing outliers.
@@ -65,8 +63,7 @@ def preprocess_data(df, dependent_column):
     df['rating_flag'] = df['rating'].apply(lambda x: 1 if pd.isna(x) or x in ['WR', 'NR'] else 0)
 
     # Handle missing values in numerical columns
-    numerical_columns = df.select_dtypes(include=[np.number]).columns
-    for col in numerical_columns:
+    for col in [dependent_column, feature_column]:
         df[f'{col}_missing_flag'] = df[col].apply(lambda x: 1 if pd.isna(x) else 0)
 
     # Convert dependent variable from float to int (truncate decimal part)
@@ -81,10 +78,10 @@ def preprocess_data(df, dependent_column):
     outlier_df = df[df[f'{dependent_column}_outlier_flag'] == 1]
     preprocessed_df = df[df[f'{dependent_column}_outlier_flag'] == 0]
 
-    # Fill missing values in numerical columns with median (optional)
-    preprocessed_df[numerical_columns] = preprocessed_df[numerical_columns].fillna(preprocessed_df[numerical_columns].median())
+    # Fill missing values in specified columns with median (optional)
+    preprocessed_df[[dependent_column, feature_column]] = preprocessed_df[[dependent_column, feature_column]].fillna(preprocessed_df[[dependent_column, feature_column]].median())
 
     # Optimize memory usage of the preprocessed dataset
-    preprocessed_df = reduce_memory_usage(preprocessed_df)
+    preprocessed_df = reduce_memory_usage(preprocessed_df, [dependent_column, feature_column])
 
     return preprocessed_df, outlier_df
