@@ -47,24 +47,27 @@ def preprocess_data(df, dependent_column, feature_column):
     Perform data preprocessing including:
     - Handling missing values and specific flags in the 'rating' column.
     - Flagging rows with missing numerical values.
+    - Filling the dependent variable with 0 for null values.
     - Converting the dependent variable from float to int by truncating decimals.
     - Memory optimization for specified columns.
 
     Parameters:
     df (pd.DataFrame): Raw DataFrame loaded from the ingestion module.
     dependent_column (str): The dependent variable/column for the model.
-    feature_column (str): The feature variable/column for the model.
+    feature_column (str): The categorical feature variable/column for the model.
 
     Returns:
     pd.DataFrame, pd.DataFrame: Two DataFrames - one preprocessed dataset and one containing outliers.
     """
     
     # Flag missing or specific values ('WR', 'NR') in the 'rating' column
-    df['rating_flag'] = df['rating'].apply(lambda x: 1 if pd.isna(x) or x in ['WR', 'NR'] else 0)
+    df['rating_flag'] = df['rating'].apply(lambda x: 1 if pd.isna(x) or x in ['WR', 'NR', None] else 0)
 
-    # Handle missing values in numerical columns
-    for col in [dependent_column, feature_column]:
-        df[f'{col}_missing_flag'] = df[col].apply(lambda x: 1 if pd.isna(x) else 0)
+    # Fill dependent column with 0 where it is null
+    df[dependent_column].fillna(0, inplace=True)
+
+    # Handle missing values in the dependent column
+    df[f'{dependent_column}_missing_flag'] = df[dependent_column].apply(lambda x: 1 if pd.isna(x) else 0)
 
     # Convert dependent variable from float to int (truncate decimal part)
     df[dependent_column] = np.floor(df[dependent_column]).astype(int)
@@ -78,8 +81,11 @@ def preprocess_data(df, dependent_column, feature_column):
     outlier_df = df[df[f'{dependent_column}_outlier_flag'] == 1]
     preprocessed_df = df[df[f'{dependent_column}_outlier_flag'] == 0]
 
-    # Fill missing values in specified columns with median (optional)
-    preprocessed_df[[dependent_column, feature_column]] = preprocessed_df[[dependent_column, feature_column]].fillna(preprocessed_df[[dependent_column, feature_column]].median())
+    # Fill missing values in the dependent column with median (optional)
+    preprocessed_df[dependent_column] = preprocessed_df[dependent_column].fillna(preprocessed_df[dependent_column].median())
+
+    # Convert categorical feature column to 'category' dtype for memory efficiency
+    preprocessed_df[feature_column] = preprocessed_df[feature_column].astype('category')
 
     # Optimize memory usage of the preprocessed dataset
     preprocessed_df = reduce_memory_usage(preprocessed_df, [dependent_column, feature_column])
