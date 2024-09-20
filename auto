@@ -1,96 +1,69 @@
 import pandas as pd
 import numpy as np
-from ingestion import load_data  # Assuming ingestion.py contains a function `load_data`
+import matplotlib.pyplot as plt
 
-def reduce_memory_usage(df, columns):
-    """
-    Reduces memory usage of specified columns in a DataFrame by downcasting numerical types where possible.
-
-    Parameters:
-    df (pd.DataFrame): The DataFrame to optimize.
-    columns (list): List of columns to optimize.
-
-    Returns:
-    pd.DataFrame: Memory-optimized DataFrame with specified columns.
-    """
-    start_mem = df[columns].memory_usage().sum() / 1024**2
-    print(f"Initial memory usage for specified columns: {start_mem:.2f} MB")
-
-    for col in columns:
-        col_type = df[col].dtype
-
-        if col_type != object:
-            c_min = df[col].min()
-            c_max = df[col].max()
-            if pd.api.types.is_integer_dtype(df[col]):
-                # Downcast integer columns
-                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                    df[col] = df[col].astype(np.int8)
-                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                    df[col] = df[col].astype(np.int16)
-                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                    df[col] = df[col].astype(np.int32)
-                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
-                    df[col] = df[col].astype(np.int64)
-            else:
-                # Downcast float columns
-                df[col] = pd.to_numeric(df[col], downcast='float')
-
-    end_mem = df[columns].memory_usage().sum() / 1024**2
-    print(f"Final memory usage for specified columns: {end_mem:.2f} MB")
-    print(f"Reduced memory by: {100 * (start_mem - end_mem) / start_mem:.1f}%")
-
-    return df
-
-def preprocess_data(df, dependent_column, feature_column):
-    """
-    Perform data preprocessing including:
-    - Handling missing values and specific flags in the 'rating' column.
-    - Flagging rows with missing numerical values.
-    - Filling the dependent variable with 0 for null values.
-    - Converting the dependent variable from float to int by truncating decimals.
-    - Memory optimization for specified columns.
-
-    Parameters:
-    df (pd.DataFrame): Raw DataFrame loaded from the ingestion module.
-    dependent_column (str): The dependent variable/column for the model.
-    feature_column (str): The categorical feature variable/column for the model.
-
-    Returns:
-    pd.DataFrame, pd.DataFrame: Two DataFrames - one preprocessed dataset and one containing outliers.
-    """
+# Function to calculate the IQR range
+def is_bad_prediction(predicted_price, price_series):
+    q1 = price_series.quantile(0.25)
+    q3 = price_series.quantile(0.75)
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
     
-    # Flag missing or specific values ('WR', 'NR') in the 'rating' column
-    df['rating_flag'] = df['rating'].apply(lambda x: 1 if pd.isna(x) or x in ['WR', 'NR', None] else 0)
+    # Check if predicted price is within the IQR bounds
+    if predicted_price < lower_bound or predicted_price > upper_bound:
+        return True  # Bad prediction
+    else:
+        return False  # Good prediction
 
-    # Fill dependent column with 0 where it is null
-    df[dependent_column].fillna(0, inplace=True)
+# Function to apply moving average and IQR check
+def moving_average_with_iqr(df, window_size=3):
+    # Sort by date to ensure correct time series order
+    df = df.sort_values(by='date')
 
-    # Handle missing values in the dependent column
-    df[f'{dependent_column}_missing_flag'] = df[dependent_column].apply(lambda x: 1 if pd.isna(x) else 0)
+    # Apply moving average for each rating group
+    df['moving_avg'] = df.groupby('rating')['price'].transform(lambda x: x.rolling(window=window_size).mean())
 
-    # Convert dependent variable from float to int (truncate decimal part)
-    df[dependent_column] = np.floor(df[dependent_column]).astype(int)
+    # Predict the next price as the last available moving average for each rating group
+    next_price = df.groupby('rating')['moving_avg'].last().reset_index()
+    next_price.columns = ['rating', 'next_predicted_price']
 
-    # Flag outliers in the dependent column based on the given range
-    df[f'{dependent_column}_outlier_flag'] = df[dependent_column].apply(
-        lambda x: 1 if x < 5 or x > 10000 else 0
-    )
+    # Check if the predicted price is within the IQR for each rating
+    next_price['is_bad_prediction'] = next_price.apply(lambda row: is_bad_prediction(row['next_predicted_price'], df[df['rating'] == row['rating']]['price']), axis=1)
+    
+    return next_price
 
-    # Combine rating and dependent outliers into one outlier DataFrame
-    df['overall_outlier_flag'] = df[f'{dependent_column}_outlier_flag'] | df['rating_flag']
+# Visualization function
+def plot_moving_avg_with_iqr(df):
+    # Plot the time series data and moving average for each rating group
+    fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Split the dataset into preprocessed and outliers
-    outlier_df = df[df['overall_outlier_flag'] == 1]
-    preprocessed_df = df[df['overall_outlier_flag'] == 0]
+    ratings = df['rating'].unique()
 
-    # Fill missing values in the dependent column with median (optional)
-    preprocessed_df[dependent_column] = preprocessed_df[dependent_column].fillna(preprocessed_df[dependent_column].median())
+    for rating in ratings:
+        subset = df[df['rating'] == rating]
+        ax.plot(subset['date'], subset['price'], label=f'Price (Rating: {rating})')
+        ax.plot(subset['date'], subset['moving_avg'], linestyle='--', label=f'Moving Avg (Rating: {rating})')
 
-    # Convert categorical feature column to 'category' dtype for memory efficiency
-    preprocessed_df[feature_column] = preprocessed_df[feature_column].astype('category')
+    ax.set_title('Price and Moving Average for Each Rating')
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Price')
+    ax.legend()
+    plt.show()
 
-    # Optimize memory usage of the preprocessed dataset
-    preprocessed_df = reduce_memory_usage(preprocessed_df, [dependent_column, feature_column])
+# Sample dataset (pass your own data here)
+data = {
+    'date': pd.date_range(start='2023-01-01', periods=100),
+    'rating': np.random.choice(['A', 'B', 'C'], size=100),
+    'price': np.random.randn(100) * 100 + 1000
+}
+df = pd.DataFrame(data)
 
-    return preprocessed_df, outlier_df
+# Run the moving average with IQR check
+window_size = 3
+predictions = moving_average_with_iqr(df, window_size=window_size)
+
+print(predictions)
+
+# Plot the result
+plot_moving_avg_with_iqr(df)
