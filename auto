@@ -72,14 +72,17 @@ def preprocess_data(df, dependent_column, feature_column):
     # Convert dependent variable from float to int (truncate decimal part)
     df[dependent_column] = np.floor(df[dependent_column]).astype(int)
 
-    # Flag outliers in the dependent column based on given range
+    # Flag outliers in the dependent column based on the given range
     df[f'{dependent_column}_outlier_flag'] = df[dependent_column].apply(
-        lambda x: 1 if pd.isna(x) or x < 5 or x > 10000 else 0
+        lambda x: 1 if x < 5 or x > 10000 else 0
     )
 
+    # Combine rating and dependent outliers into one outlier DataFrame
+    df['overall_outlier_flag'] = df[f'{dependent_column}_outlier_flag'] | df['rating_flag']
+
     # Split the dataset into preprocessed and outliers
-    outlier_df = df[df[f'{dependent_column}_outlier_flag'] == 1]
-    preprocessed_df = df[df[f'{dependent_column}_outlier_flag'] == 0]
+    outlier_df = df[df['overall_outlier_flag'] == 1]
+    preprocessed_df = df[df['overall_outlier_flag'] == 0]
 
     # Fill missing values in the dependent column with median (optional)
     preprocessed_df[dependent_column] = preprocessed_df[dependent_column].fillna(preprocessed_df[dependent_column].median())
