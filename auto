@@ -1,73 +1,90 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras import Input
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
+from ingestion import load_data  # Assuming ingestion.py contains a function `load_data`
 
-# Assuming your clean dataset is a Pandas DataFrame with 'category' and 'numerical_column'
-df = pd.DataFrame({
-    'category': ['A', 'A', 'B', 'B', 'C', 'C'],
-    'numerical_column': [100, 110, 200, 195, 305, 315]
-})
+def reduce_memory_usage(df):
+    """
+    Reduces memory usage of a DataFrame by downcasting numerical and object types where possible.
 
-# Step 1: Prepare the data
-# Label encode the categorical column
-le = LabelEncoder()
-df['category_encoded'] = le.fit_transform(df['category'])
+    Parameters:
+    df (pd.DataFrame): The DataFrame to optimize.
 
-# Standardize the numerical column
-scaler = StandardScaler()
-df['scaled_numerical'] = scaler.fit_transform(df[['numerical_column']])
+    Returns:
+    pd.DataFrame: Memory-optimized DataFrame.
+    """
+    start_mem = df.memory_usage().sum() / 1024**2
+    print(f"Initial memory usage: {start_mem:.2f} MB")
 
-# Step 2: Define the autoencoder model
-def build_autoencoder():
-    model = Sequential([
-        Input(shape=(1,)),
-        Dense(16, activation='relu'),
-        Dense(8, activation='relu'),
-        Dense(16, activation='relu'),
-        Dense(1, activation='linear')  # Output layer to reconstruct the input
-    ])
-    
-    model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
-    
-    return model
+    for col in df.columns:
+        col_type = df[col].dtype
 
-# Step 3: Train the model for each category separately
-categories = df['category'].unique()
+        if col_type != object:
+            c_min = df[col].min()
+            c_max = df[col].max()
+            if pd.api.types.is_integer_dtype(df[col]):
+                # Downcast integer columns
+                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
+                    df[col] = df[col].astype(np.int64)
+            else:
+                # Downcast float columns
+                df[col] = pd.to_numeric(df[col], downcast='float')
+        else:
+            # Convert object types to category for memory efficiency
+            df[col] = df[col].astype('category')
 
-for category in categories:
-    print(f"Training autoencoder for category: {category}")
+    end_mem = df.memory_usage().sum() / 1024**2
+    print(f"Final memory usage after optimization: {end_mem:.2f} MB")
+    print(f"Reduced memory by: {100 * (start_mem - end_mem) / start_mem:.1f}%")
+
+    return df
+
+def preprocess_data(df, dependent_column):
+    """
+    Perform data preprocessing including:
+    - Handling missing values and specific flags in the 'rating' column.
+    - Flagging rows with missing numerical values.
+    - Flagging outliers in the dependent column.
+    - Converting the dependent variable from float to int by truncating decimals.
+    - Memory optimization for efficient processing.
+
+    Parameters:
+    df (pd.DataFrame): Raw DataFrame loaded from the ingestion module.
+    dependent_column (str): The dependent variable/column for the model.
+
+    Returns:
+    pd.DataFrame, pd.DataFrame: Two DataFrames - one preprocessed dataset and one containing outliers.
+    """
     
-    # Select the data for the current category
-    category_data = df[df['category'] == category]['scaled_numerical'].values
-    category_data = category_data.reshape(-1, 1)  # Reshape for the model
-    
-    # Train/test split
-    X_train, X_test = train_test_split(category_data, test_size=0.2, random_state=42)
-    
-    # Build the autoencoder model
-    model = build_autoencoder()
-    
-    # Train the model
-    model.fit(X_train, X_train, epochs=100, batch_size=8, validation_data=(X_test, X_test), verbose=0)
-    
-    # Reconstruct the entire category data
-    reconstruction = model.predict(category_data)
-    
-    # Inverse transform to get original values
-    original_values = scaler.inverse_transform(category_data)
-    reconstructed_values = scaler.inverse_transform(reconstruction)
-    
-    # Print original and reconstructed values
-    print(f"Original and Reconstructed values for category '{category}':")
-    for original, reconstructed in zip(original_values, reconstructed_values):
-        print(f"Original: {original[0]}, Reconstructed: {reconstructed[0]}")
-    
-    # Step 4: Calculate and print the model score (MSE)
-    mse = mean_squared_error(original_values, reconstructed_values)
-    print(f"Model MSE for category '{category}': {mse}\n")
+    # Flag missing or specific values ('WR', 'NR') in the 'rating' column
+    df['rating_flag'] = df['rating'].apply(lambda x: 1 if pd.isna(x) or x in ['WR', 'NR'] else 0)
+
+    # Handle missing values in numerical columns
+    numerical_columns = df.select_dtypes(include=[np.number]).columns
+    for col in numerical_columns:
+        df[f'{col}_missing_flag'] = df[col].apply(lambda x: 1 if pd.isna(x) else 0)
+
+    # Convert dependent variable from float to int (truncate decimal part)
+    df[dependent_column] = np.floor(df[dependent_column]).astype(int)
+
+    # Flag outliers in the dependent column based on given range
+    df[f'{dependent_column}_outlier_flag'] = df[dependent_column].apply(
+        lambda x: 1 if pd.isna(x) or x < 5 or x > 10000 else 0
+    )
+
+    # Split the dataset into preprocessed and outliers
+    outlier_df = df[df[f'{dependent_column}_outlier_flag'] == 1]
+    preprocessed_df = df[df[f'{dependent_column}_outlier_flag'] == 0]
+
+    # Fill missing values in numerical columns with median (optional)
+    preprocessed_df[numerical_columns] = preprocessed_df[numerical_columns].fillna(preprocessed_df[numerical_columns].median())
+
+    # Optimize memory usage of the preprocessed dataset
+    preprocessed_df = reduce_memory_usage(preprocessed_df)
+
+    return preprocessed_df, outlier_df
