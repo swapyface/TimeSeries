@@ -1,82 +1,119 @@
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
+from sklearn.metrics import mean_squared_error
+import openpyxl
 
-# Step 1: Load the existing data and calculate moving averages for each category
-def calculate_moving_avg(data, category_col, value_col):
-    # Group by category
-    moving_avgs = data.groupby(category_col)[value_col].expanding().mean().reset_index()
-    moving_avgs = moving_avgs.drop('level_1', axis=1)
-    return moving_avgs
+# Assuming your clean dataset is a Pandas DataFrame with 'category' and 'numerical_column'
+df = pd.DataFrame({
+    'category': np.random.choice(['A', 'B', 'C'], size=1000000),
+    'numerical_column': np.random.normal(loc=100, scale=15, size=1000000)
+})
 
-# Step 2: Load new data and check for outliers based on IQR
-def flag_outliers(data, category_col, value_col):
-    outliers = []
-    non_outliers = []
-    
-    grouped = data.groupby(category_col)
-    
-    for category, group in grouped:
-        q1 = group[value_col].quantile(0.25)
-        q3 = group[value_col].quantile(0.75)
-        iqr = q3 - q1
-        
-        lower_bound = q1 - 1.5 * iqr
-        upper_bound = q3 + 1.5 * iqr
-        
-        for index, row in group.iterrows():
-            if row[value_col] < lower_bound or row[value_col] > upper_bound:
-                outliers.append(row)
-            else:
-                non_outliers.append(row)
-    
-    return pd.DataFrame(outliers), pd.DataFrame(non_outliers)
+# Step 1: Prepare the data
+# Label encode the categorical column
+le = LabelEncoder()
+df['category_encoded'] = le.fit_transform(df['category'])
 
-# Step 3: Update the moving average Excel file
-def update_moving_avg(new_data, category_col, value_col, avg_file):
-    # Load the existing moving averages
-    moving_avgs = pd.read_excel(avg_file)
+# Standardize the numerical column
+scaler = StandardScaler()
+df['scaled_numerical'] = scaler.fit_transform(df[['numerical_column']])
+
+# Step 2: Define the autoencoder model function for KerasRegressor
+def build_autoencoder(learning_rate=0.001, neurons_1=16, neurons_2=8):
+    model = Sequential([
+        Dense(neurons_1, activation='relu', input_shape=(1,)),
+        Dense(neurons_2, activation='relu'),
+        Dense(neurons_1, activation='relu'),
+        Dense(1, activation='linear')  # Output layer to reconstruct the input
+    ])
     
-    for _, row in new_data.iterrows():
-        category = row[category_col]
-        value = row[value_col]
+    optimizer = Adam(learning_rate=learning_rate)
+    model.compile(optimizer=optimizer, loss='mse')
+    return model
+
+# DataFrame to store the results
+results = pd.DataFrame(columns=['category', 'original', 'reconstructed', 'status'])
+
+# Step 3: Train the model for each category separately
+categories = df['category'].unique()
+
+# Hyperparameter tuning parameters
+param_dist = {
+    'neurons_1': [8, 16, 32],
+    'neurons_2': [4, 8, 16],
+    'learning_rate': [0.001, 0.01, 0.1],
+    'epochs': [50, 100],
+    'batch_size': [256, 512, 1024]
+}
+
+for category in categories:
+    print(f"Training autoencoder for category: {category}")
+    
+    # Select the data for the current category
+    category_data = df[df['category'] == category]['scaled_numerical'].values
+    category_data = category_data.reshape(-1, 1)  # Reshape for the model
+    
+    # Get the original values (before scaling) for bounds calculation
+    original_category_data = df[df['category'] == category]['numerical_column'].values
+    
+    # Train/test split
+    X_train, X_test = train_test_split(category_data, test_size=0.2, random_state=42)
+    
+    # Create the KerasRegressor wrapper
+    model = KerasRegressor(build_fn=build_autoencoder, verbose=0)
+    
+    # Perform RandomizedSearchCV for hyperparameter tuning
+    random_search = RandomizedSearchCV(estimator=model, param_distributions=param_dist, 
+                                       n_iter=5, cv=3, verbose=1, random_state=42)
+    
+    random_search_result = random_search.fit(X_train, X_train)
+    
+    # Get the best hyperparameters
+    best_params = random_search_result.best_params_
+    print(f"Best hyperparameters for category {category}: {best_params}")
+    
+    # Use the best hyperparameters to build and train the final model
+    best_model = build_autoencoder(learning_rate=best_params['learning_rate'],
+                                   neurons_1=best_params['neurons_1'],
+                                   neurons_2=best_params['neurons_2'])
+    
+    # Train the model
+    best_model.fit(X_train, X_train, epochs=best_params['epochs'], 
+                   batch_size=best_params['batch_size'], validation_data=(X_test, X_test), verbose=1)
+    
+    # Reconstruct the entire category data
+    reconstruction = best_model.predict(category_data)
+    
+    # Inverse transform to get original values
+    original_values = scaler.inverse_transform(category_data)
+    reconstructed_values = scaler.inverse_transform(reconstruction)
+    
+    # Check if the difference between original and reconstructed value is greater than 20%
+    for original, reconstructed in zip(original_values, reconstructed_values):
+        # Calculate the percentage difference
+        difference_percentage = abs(original[0] - reconstructed[0]) / original[0]
         
-        # Check if the category exists in the moving averages file
-        if category in moving_avgs[category_col].values:
-            # Update the moving average
-            current_avg = moving_avgs.loc[moving_avgs[category_col] == category, value_col].values[0]
-            new_avg = (current_avg + value) / 2
-            moving_avgs.loc[moving_avgs[category_col] == category, value_col] = new_avg
+        # Check if the difference exceeds 20%
+        if difference_percentage > 0.2:
+            status = 'Bad Prediction'
         else:
-            # Add a new category with its initial value
-            new_row = pd.DataFrame({category_col: [category], value_col: [value]})
-            moving_avgs = pd.concat([moving_avgs, new_row], ignore_index=True)
-    
-    # Save the updated moving averages to the Excel file
-    moving_avgs.to_excel(avg_file, index=False)
+            status = 'Good Prediction'
+        
+        # Append to the results DataFrame
+        results = results.append({
+            'category': category,
+            'original': original[0],
+            'reconstructed': reconstructed[0],
+            'status': status
+        }, ignore_index=True)
 
-# Step 4: Process new data and update files accordingly
-def process_new_data(new_data, category_col, value_col, avg_file, outlier_file):
-    outliers, non_outliers = flag_outliers(new_data, category_col, value_col)
-    
-    # Update moving averages for non-outliers
-    update_moving_avg(non_outliers, category_col, value_col, avg_file)
-    
-    # Append outliers to the outlier file
-    if not outliers.empty:
-        with pd.ExcelWriter(outlier_file, mode='a') as writer:
-            outliers.to_excel(writer, index=False)
+# Step 4: Save the results to an Excel file
+results.to_excel("good_bad_predictions.xlsx", index=False)
 
-# Example usage
-data = pd.read_csv('initial_dataset.csv')  # Load your data
-category_col = 'category'
-value_col = 'value'
-
-# Step 1: Calculate moving averages and save to Excel
-moving_avg_df = calculate_moving_avg(data, category_col, value_col)
-moving_avg_df.to_excel('moving_avg.xlsx', index=False)
-
-# Load new data for processing
-new_data = pd.read_excel('new_data.xlsx')
-
-# Step 4: Process new data and update files
-process_new_data(new_data, category_col, value_col, 'moving_avg.xlsx', 'outliers.xlsx')
+print("Results saved to 'good_bad_predictions.xlsx'")
